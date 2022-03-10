@@ -1,0 +1,13 @@
+cradle:
+  stack:
+    - path: "./src"
+      component: "zipctx:lib"
+
+    - path: "./exe/Main.hs"
+      component: "zipctx:exe:zipctx-exe"
+
+    - path: "./exe/Paths_zipctx.hs"
+      component: "zipctx:exe:zipctx-exe"
+
+    - path: "./test"
+      component: "zipctx:test:zipctx-test"
