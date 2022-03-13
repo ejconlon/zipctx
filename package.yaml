@@ -15,6 +15,10 @@ description: Please see the README on GitHub at <https://github.com/githubuser/z
 
 dependencies:
 - base >= 4.12 && < 5
+- containers
+- mtl
+- recursion-schemes
+- unliftio-core
 
 default-extensions:
 - BangPatterns
@@ -37,7 +41,6 @@ default-extensions:
 - Rank2Types
 - ScopedTypeVariables
 - StandaloneDeriving
-- TemplateHaskell
 - TupleSections
 - TypeApplications
 - TypeOperators
