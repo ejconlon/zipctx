@@ -10,6 +10,7 @@ import Data.Kind (Type)
 import Data.Sequence (Seq (..))
 import Data.Functor.Foldable (Base, Recursive (..), Corecursive (..))
 import Data.Map.Strict (Map)
+import Data.Functor (($>))
 import Control.Monad.Reader (ReaderT, MonadReader (..), runReaderT, asks)
 import Control.Monad.Except (MonadError (..), Except, runExcept)
 import Control.Monad.State (StateT, MonadState (..), evalStateT, gets, runStateT)
@@ -29,20 +30,21 @@ type family Redex (f :: Type -> Type) :: Type -> Type -> Type
 type family Eval (f :: Type -> Type) :: Type
 -- | Unevaluated expressions
 type family Uneval (f :: Type -> Type) :: Type
--- | The result of evaluation
-type family Result (f :: Type -> Type) :: Type
+
+-- -- | The result of evaluation
+-- type family Result (f :: Type -> Type) :: Type
 
 type family Dissection (f :: Type -> Type) :: Type -> Type -> Type
 type family Local (f :: Type -> Type) :: Type -> Type
 
 -- | Machine configuration
 data Elem (f :: Type -> Type) c j =
-    ElemReturn !(Result f)
+    ElemReturn !(Eval f)
   | ElemFocus !(f j)
   | ElemReduce !(Redex f c j)
 
-deriving stock instance (Eq (Result f), Eq (f j), Eq (Redex f c j)) => Eq (Elem f c j)
-deriving stock instance (Show (Result f), Show (f j), Show (Redex f c j)) => Show (Elem f c j)
+deriving stock instance (Eq (Eval f), Eq (f j), Eq (Redex f c j)) => Eq (Elem f c j)
+deriving stock instance (Show (Eval f), Show (f j), Show (Redex f c j)) => Show (Elem f c j)
 
 instance (Functor f, Bifunctor (Redex f)) => Bifunctor (Elem f) where
   bimap f g = go where
@@ -61,13 +63,13 @@ instance (Functor f, Bifunctor (Redex f)) => Bifunctor (Elem f) where
 
 -- | Reduction
 data Reduction (f :: Type -> Type) j =
-    ReductionReturn !(Result f)
+    ReductionReturn !(Eval f)
   | ReductionFocus !(f j)
   deriving stock (Functor)
 
 -- | Focus
 data Focus (f :: Type -> Type) c j =
-    FocusReturn !(Result f)
+    FocusReturn !(Eval f)
   | FocusDissect !j !(Dissection f c j)
 
 data Step (f :: Type -> Type) c j =
@@ -114,24 +116,35 @@ deriving newtype instance Monad (Effect f) => Monad (MachineM f)
 deriving newtype instance Monad (Effect f) => MonadStack (DisF f) (MachineM f)
 deriving newtype instance Monad (Effect f) => MonadState (ElemF f) (MachineM f)
 
-eval :: (Recursive (Uneval f), Dissectable f) => Uneval f -> Effect f (ElemF f, DisStack f)
-eval = error "TODO"
-
 runMachineM :: MachineM f a -> ElemF f -> DisStack f -> Effect f (a, ElemF f, DisStack f)
 runMachineM = error "TODO"
 
-evalM :: Monad (Effect f) => MachineM f Bool
+type MachineC f = (Dissectable f, Monad (Effect f))
+
+eval :: (Recursive (Uneval f), Dissectable f) => Uneval f -> Effect f (ElemF f, DisStack f)
+eval = error "TODO"
+
+evalM :: MachineC f => MachineM f Bool
 evalM = do
   ElemF elem <- get
   case elem of
-    ElemReturn res -> error "TODO"
+    ElemReturn res -> do
+      md <- popStackM
+      case md of
+        Nothing -> pure True
+        Just (DisF d) ->
+          case disStep res d of
+            _ -> undefined
+          --   StepReturn c -> put (ElemF c) $> False
+          --   StepReduce red -> undefined
+          --   StepDissect j ds' -> undefined
     ElemFocus jf -> error "TODO"
     ElemReduce red -> error "TODO"
 
-onFocus :: Dissectable f => Focus f (Eval f) (Uneval f) -> MachineM f (Result f)
-onFocus = \case
-    FocusReturn r -> pure r
-    FocusDissect j d -> error "TODO"
+-- onFocus :: Dissectable f => Focus f (Eval f) (Uneval f) -> MachineM f (Result f)
+-- onFocus = \case
+--     FocusReturn r -> pure r
+--     FocusDissect j d -> error "TODO"
 
 -- eval :: (Recursive (Uneval f), Dissectable f) => Uneval f -> MachineM f (Result f)
 -- eval = onFocus . disFocus . project
@@ -247,7 +260,6 @@ instance MonadFail ExpM where
   fail = throwError
 
 type instance Effect ExpF = ExpM
-type instance Result ExpF = Value
 type instance Eval ExpF = Value
 type instance Uneval ExpF = Exp
 type instance Redex ExpF = ExpRed
