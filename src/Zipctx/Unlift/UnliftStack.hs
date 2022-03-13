@@ -17,7 +17,7 @@ import Data.Bifunctor (first)
 import Zipctx.Structure.MonadStack (MonadStack (..))
 import Zipctx.Structure.Stack (StackF (..))
 import Zipctx.Structure.StateStack (StateStack (..), foldStateStack, nullStateStack, peekStateStack, popStateStack,
-                                       reflectStateStack)
+                                    reflectStateStack)
 import Zipctx.Unlift.UnliftState (UnliftStateT, runUnliftStateT)
 
 newtype UnliftStackT s x m a = UnliftStackT { unUnliftStackT :: UnliftStateT (StateStack s x) m a }

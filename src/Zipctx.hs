@@ -1,28 +1,31 @@
-{-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE InstanceSigs #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 -- | Reduction semantics based on "Clowns to the Left of me, Jokers to the Right" by Conor McBride
 -- https://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.475.6134&rep=rep1&type=pdf
 -- Susp and Dissectable adapted from https://reasonablypolymorphic.com/blog/clowns-jokers/index.html
 module Zipctx where
 
-import Data.Bifunctor (Bifunctor (..))
-import Data.Kind (Type)
-import Data.Sequence (Seq (..))
-import Data.Functor.Foldable (Base, Recursive (..), Corecursive (..))
-import Data.Map.Strict (Map)
-import Data.Functor (($>))
-import Control.Monad.Reader (ReaderT, MonadReader (..), runReaderT)
-import Control.Monad.Except (MonadError (..), Except, runExcept)
+import Control.Monad (unless)
+import Control.Monad.Except (Except, MonadError (..), runExcept)
+import Control.Monad.Reader (MonadReader (..), ReaderT, runReaderT)
 import Control.Monad.State.Strict (MonadState (..))
-import Zipctx.Scope (AnnoExp (..), Scoped (..), projectAnnoExp, AnnoScope (AnnoScope))
-import Zipctx.Structure.Stack (Stack)
-import Zipctx.Structure.MonadStack (MonadStack (..))
-import Zipctx.Structure.StateStack (StateStackT, runStateStackT, StateStack)
+import Control.Monad.Trans (lift)
+import Data.Bifunctor (Bifunctor (..))
+import Data.Functor (($>))
+import Data.Functor.Foldable (Base, Corecursive (..), Recursive (..))
+import Data.Kind (Type)
+import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
+import Data.Sequence (Seq (..))
+import Zipctx.Scope (AnnoExp (..), AnnoScope (AnnoScope), Scoped (..), projectAnnoExp)
+import Zipctx.Structure.MonadStack (MonadStack (..))
+import Zipctx.Structure.Stack (Stack)
+import Zipctx.Structure.StateStack (StateStack, StateStackT, emptyStateStack, nullStateStack, runStateStackT)
 
--- | Elem
+-- Basic data definitions:
+
+-- | An element in our machine configuration
 data Elem f r v c j =
     ElemReturn !v
   | ElemFocus !(f j)
@@ -36,13 +39,13 @@ instance (Functor f, Bifunctor r) => Bifunctor (Elem f r v) where
       ElemFocus fj -> ElemFocus (fmap g fj)
       ElemReduce rcj -> ElemReduce (bimap f g rcj)
 
--- | Reduction
+-- | The result of a reduction
 data Reduction f v j =
     ReductionReturn !v
   | ReductionFocus !(f j)
   deriving stock (Eq, Show, Functor)
 
--- | Focus
+-- | The result of a focus operation
 data Focus d v c j =
     FocusReturn !v
   | FocusDissect !j !(d c j)
@@ -54,6 +57,7 @@ instance Bifunctor d => Bifunctor (Focus d v) where
       FocusReturn v -> FocusReturn v
       FocusDissect j d -> FocusDissect (g j) (bimap f g d)
 
+-- | The Result of a step operation
 data Step r d c j =
     StepReturn !c
   | StepReduce !(r c j)
@@ -66,6 +70,10 @@ instance (Bifunctor r, Bifunctor d) => Bifunctor (Step r d) where
     StepReduce r -> StepReduce (bimap f g r)
     StepDissect j d -> StepDissect (g j) (bimap f g d)
 
+-- The core classes capturing reduction/dissection:
+
+-- | Describes reduction
+-- Note that all type families are keyed on the reduction bifunctor
 class (Bifunctor r, Functor (RedExp r), Monad (RedEffect r)) => Reducible r where
   -- | Expression functor
   type family RedExp r :: Type -> Type
@@ -82,6 +90,8 @@ class (Bifunctor r, Functor (RedExp r), Monad (RedEffect r)) => Reducible r wher
   -- | Evaluates the redex
   redexReduce :: r (RedEval r) (RedUneval r) -> RedEffect r (Reduction (RedExp r) (RedEval r) (RedUneval r))
 
+-- | Describes dissection
+-- Note that all type families are keyed on the dissection bifunctor
 class (Bifunctor d, Functor (DisExp d)) => Dissectable d where
   type family DisExp d :: Type -> Type
 
@@ -97,6 +107,7 @@ class (Bifunctor d, Functor (DisExp d)) => Dissectable d where
   -- | Advance one step in the dissection
   disStep :: Scoped (DisLocal d) c j => c -> d c j -> Step (DisRed d) d c j
 
+-- | Awful - here to unify dissection and reduction and re-key all type families on the base language functor
 class (
     Functor f, Monad (LangEffect f),
     Reducible (LangRed f), RedExp (LangRed f) ~ f, RedEval (LangRed f) ~ LangEval f,
@@ -112,8 +123,13 @@ class (
   type LangEffect f :: Type -> Type
   type LangLocal f :: Type -> Type
 
+-- Machine implementation:
+
+-- Need to newtype these because otherwise GHC complains about type family applications in the monad stack:
 newtype MachineElem f = MachineElem (Elem f (LangRed f) (LangEval f) (LangEval f) (LangUneval f))
 newtype MachineDis f = MachineDis (LangDis f (LangEval f) (LangUneval f))
+
+type MachineC f = (Language f, MonadFail (LangEffect f))
 
 newtype MachineM f a = MachineM { unMachineM :: StateStackT (MachineElem f) (MachineDis f) (LangEffect f) a }
 
@@ -123,13 +139,26 @@ deriving newtype instance Monad (LangEffect f) => Monad (MachineM f)
 deriving newtype instance Monad (LangEffect f) => MonadStack (MachineDis f) (MachineM f)
 deriving newtype instance Monad (LangEffect f) => MonadState (MachineElem f) (MachineM f)
 
+machineLift :: Monad (LangEffect f) => LangEffect f a -> MachineM f a
+machineLift = MachineM . lift
+
+instance MonadFail (LangEffect f) => MonadFail (MachineM f) where
+  fail = machineLift . fail
+
 runMachineM :: MachineM f a -> StateStack (MachineElem f) (MachineDis f) -> LangEffect f (a, StateStack (MachineElem f) (MachineDis f))
 runMachineM = runStateStackT . unMachineM
 
-evalM :: Language f => MachineM f Bool
-evalM = do
-  MachineElem elem <- get
-  case elem of
+zeroMachineM :: MachineC f => MachineM f a -> MachineElem f -> LangEffect f a
+zeroMachineM m e = do
+  (a, ss) <- runMachineM m (emptyStateStack e)
+  if nullStateStack ss
+    then pure a
+    else fail "machine did not consume whole stack"
+
+stepEvalM :: MachineC f => MachineM f Bool
+stepEvalM = do
+  MachineElem elm <- get
+  case elm of
     ElemReturn res -> do
       md <- popStackM
       case md of
@@ -137,10 +166,28 @@ evalM = do
         Just (MachineDis d) ->
           case disStep res d of
             StepReturn c -> put (MachineElem (ElemReturn c)) $> False
-            StepReduce red -> undefined
-            StepDissect j ds' -> undefined
+            StepReduce red -> do
+              res <- machineLift (redexReduce red)
+              let nextElm = case res of { ReductionReturn re -> ElemReturn re; ReductionFocus re -> ElemFocus re }
+              put (MachineElem nextElm) $> False
+            StepDissect j ds' -> error "TODO"
     ElemFocus jf -> error "TODO"
     ElemReduce red -> error "TODO"
+
+multiStepEvalM :: MachineC f => MachineM f (LangEval f)
+multiStepEvalM = run where
+  run = do
+    loop
+    MachineElem elm <- get
+    case elm of
+      ElemReturn le -> pure le
+      _ -> fail "multi-step evaluation failed"
+  loop = do
+    done <- stepEvalM
+    unless done loop
+
+eval :: MachineC f => f (LangUneval f) -> LangEffect f (LangEval f)
+eval f = zeroMachineM multiStepEvalM (MachineElem (ElemFocus f))
 
 -- Example follows:
 
@@ -266,7 +313,7 @@ instance Reducible ExpRed where
         ValueLit (LitBool b) ->
           pure (ReductionFocus (projectAnnoExp (if b then jt else je)))
         _ -> fail "non-boolean guard"
-    ExpRedApp h tl -> error "TODO"
+    ExpRedApp h tl -> error "TODO"  -- implement some basic functions
 
 instance Dissectable ExpDis where
   type DisExp ExpDis = ExpF
@@ -302,3 +349,9 @@ instance Language ExpF where
   type LangLocal ExpF = ExpLocal
   type LangRed ExpF = ExpRed
   type LangDis ExpF = ExpDis
+
+-- | Finally, the payoff: evaluate an expression with the machine
+evalExp :: Exp -> Either Error Value
+evalExp e =
+  let f = projectAnnoExp (AnnoExp mempty e)
+  in runExpM (eval f) mempty

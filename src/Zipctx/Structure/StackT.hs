@@ -7,13 +7,13 @@ module Zipctx.Structure.StackT
   , evalStackM
   ) where
 
+import Control.Monad.Identity (Identity (..))
 import Control.Monad.State (MonadState (..), StateT (..), gets, modify', state)
 import Control.Monad.Trans (MonadTrans (..))
-import Control.Monad.Identity (Identity (..))
 import Data.Bifunctor (first)
 import Data.Functor.Foldable (cata)
-import Zipctx.Structure.Stack (Stack, nullStack, pushStack, popStack, peekStack, revertStack, revertMapStack)
 import Zipctx.Structure.MonadStack (MonadStack (..))
+import Zipctx.Structure.Stack (Stack, nullStack, peekStack, popStack, pushStack, revertMapStack, revertStack)
 
 newtype StackT x m a = StackT { unStackT :: StateT (Stack x) m a }
   deriving newtype (Functor, Applicative, Monad)
