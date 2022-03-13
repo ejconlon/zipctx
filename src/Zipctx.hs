@@ -13,15 +13,14 @@ import Data.Sequence (Seq (..))
 import Data.Functor.Foldable (Base, Recursive (..), Corecursive (..))
 import Data.Map.Strict (Map)
 import Data.Functor (($>))
-import Control.Monad.Reader (ReaderT, MonadReader (..), runReaderT, asks)
+import Control.Monad.Reader (ReaderT, MonadReader (..), runReaderT)
 import Control.Monad.Except (MonadError (..), Except, runExcept)
-import Control.Monad.State (StateT, MonadState (..), evalStateT, gets, runStateT)
-import Zipctx.Scope (AnnoExp (..), Scoped (..))
-import Data.Proxy (Proxy)
+import Control.Monad.State.Strict (MonadState (..))
+import Zipctx.Scope (AnnoExp (..), Scoped (..), projectAnnoExp, AnnoScope (AnnoScope))
 import Zipctx.Structure.Stack (Stack)
 import Zipctx.Structure.MonadStack (MonadStack (..))
--- import Zipctx.Structure.StackT (StackT, runStackT)
-import Zipctx.Structure.StateStack (StateStackT, runStateStackT)
+import Zipctx.Structure.StateStack (StateStackT, runStateStackT, StateStack)
+import qualified Data.Map.Strict as Map
 
 -- | Elem
 data Elem f r v c j =
@@ -67,7 +66,7 @@ instance (Bifunctor r, Bifunctor d) => Bifunctor (Step r d) where
     StepReduce r -> StepReduce (bimap f g r)
     StepDissect j d -> StepDissect (g j) (bimap f g d)
 
-class (Bifunctor r, Functor (RedExp r), Monad (RedEffect r), Base (RedUneval r) ~ RedExp r) => Reducible r where
+class (Bifunctor r, Functor (RedExp r), Monad (RedEffect r)) => Reducible r where
   -- | Expression functor
   type family RedExp r :: Type -> Type
 
@@ -124,11 +123,8 @@ deriving newtype instance Monad (LangEffect f) => Monad (MachineM f)
 deriving newtype instance Monad (LangEffect f) => MonadStack (MachineDis f) (MachineM f)
 deriving newtype instance Monad (LangEffect f) => MonadState (MachineElem f) (MachineM f)
 
-runMachineM :: MachineM f a -> MachineElem f -> Stack (MachineDis f) -> m (a, MachineElem f, Stack (MachineDis f))
-runMachineM = error "TODO"
-
--- eval :: (Recursive (Uneval f), Dissectable f) => Uneval f -> Effect f (ElemF f, DisStack f)
--- eval = error "TODO"
+runMachineM :: MachineM f a -> StateStack (MachineElem f) (MachineDis f) -> LangEffect f (a, StateStack (MachineElem f) (MachineDis f))
+runMachineM = runStateStackT . unMachineM
 
 evalM :: Language f => MachineM f Bool
 evalM = do
@@ -241,11 +237,13 @@ instance Bifunctor ExpDis where
     ExpDisAppHead js -> ExpDisAppHead (fmap g js)
     ExpDisAppTail c cs js -> ExpDisAppTail (f c) (fmap f cs) (fmap g js)
 
-data ExpLocal c = ExpLocal !Var !c
-  deriving stock (Eq, Show)
-
 type Error = String
 type VarEnv = Map Var Value
+
+type ExpLocal = AnnoScope (Map Var)
+
+expLocal :: Var -> c -> ExpLocal c
+expLocal v = AnnoScope . Map.singleton v
 
 newtype ExpM a = ExpM { unExpM :: ReaderT VarEnv (Except Error) a }
   deriving newtype (Functor, Applicative, Monad, MonadReader VarEnv, MonadError Error)
@@ -260,13 +258,13 @@ instance Reducible ExpRed where
   type RedExp ExpRed = ExpF
   type RedEffect ExpRed = ExpM
   type RedEval ExpRed = Value
-  type RedUneval ExpRed = AnnoExp ExpLocal Value Exp
+  type RedUneval ExpRed = AnnoExp (Map Var) Value Exp
 
   redexReduce = \case
     ExpRedIf c jt je ->
       case c of
         ValueLit (LitBool b) ->
-          pure (ReductionFocus (traverse project (if b then jt else je)))
+          pure (ReductionFocus (projectAnnoExp (if b then jt else je)))
         _ -> fail "non-boolean guard"
     ExpRedApp h tl -> error "TODO"
 
@@ -284,7 +282,7 @@ instance Dissectable ExpDis where
     ExpAppF h tl -> FocusDissect h (ExpDisAppHead tl)
 
   disStep c = \case
-    ExpDisLetBind v jb -> StepDissect (localScope (ExpLocal v c) jb) ExpDisLetBody
+    ExpDisLetBind v jb -> StepDissect (localScope (expLocal v c) jb) ExpDisLetBody
     ExpDisLetBody -> StepReturn c
     ExpDisIf jt je -> StepReduce (ExpRedIf c jt je)
     ExpDisAppHead jtl ->
@@ -299,7 +297,7 @@ instance Dissectable ExpDis where
 instance Language ExpF where
   type LangEffect ExpF = ExpM
   type LangEval ExpF = Value
-  type LangUneval ExpF = AnnoExp ExpLocal Value Exp
+  type LangUneval ExpF = AnnoExp (Map Var) Value Exp
   type LangEval ExpF = Value
   type LangLocal ExpF = ExpLocal
   type LangRed ExpF = ExpRed
