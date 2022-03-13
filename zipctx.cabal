@@ -28,6 +28,7 @@ library
       Zipctx.Scope
       Zipctx.Structure.MonadStack
       Zipctx.Structure.Stack
+      Zipctx.Structure.StackT
       Zipctx.Structure.StateStack
       Zipctx.Unlift.UnliftStack
       Zipctx.Unlift.UnliftState
