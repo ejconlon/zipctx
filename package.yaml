@@ -23,7 +23,6 @@ dependencies:
 default-extensions:
 - BangPatterns
 - ConstraintKinds
-- DeriveAnyClass
 - DeriveFunctor
 - DeriveFoldable
 - DeriveGeneric
@@ -44,7 +43,7 @@ default-extensions:
 - TupleSections
 - TypeApplications
 - TypeOperators
-- TypeFamilies
+# - TypeFamilies
 
 ghc-options:
 - -Wall

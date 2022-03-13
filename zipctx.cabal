@@ -39,7 +39,6 @@ library
   default-extensions:
       BangPatterns
       ConstraintKinds
-      DeriveAnyClass
       DeriveFunctor
       DeriveFoldable
       DeriveGeneric
@@ -60,7 +59,6 @@ library
       TupleSections
       TypeApplications
       TypeOperators
-      TypeFamilies
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wpartial-fields -Wredundant-constraints -fno-warn-unused-top-binds -fwrite-ide-info -hiedir=.hie
   build-depends:
       base >=4.12 && <5
@@ -80,7 +78,6 @@ test-suite zipctx-test
   default-extensions:
       BangPatterns
       ConstraintKinds
-      DeriveAnyClass
       DeriveFunctor
       DeriveFoldable
       DeriveGeneric
@@ -101,7 +98,6 @@ test-suite zipctx-test
       TupleSections
       TypeApplications
       TypeOperators
-      TypeFamilies
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wpartial-fields -Wredundant-constraints -fno-warn-unused-top-binds -fwrite-ide-info -hiedir=.hie -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       base >=4.12 && <5

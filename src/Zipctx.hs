@@ -1,4 +1,6 @@
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE InstanceSigs #-}
 
 -- | Reduction semantics based on "Clowns to the Left of me, Jokers to the Right" by Conor McBride
 -- https://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.475.6134&rep=rep1&type=pdf
@@ -21,135 +23,130 @@ import Zipctx.Structure.MonadStack (MonadStack (..))
 -- import Zipctx.Structure.StackT (StackT, runStackT)
 import Zipctx.Structure.StateStack (StateStackT, runStateStackT)
 
--- | Some monad capturing the effect of evaluation (e.g. reader, error, state, and their combinations)
-type family Effect (f :: Type -> Type) :: Type -> Type
-
--- | A datatype expressing redexes associated with the expression functor
-type family Redex (f :: Type -> Type) :: Type -> Type -> Type
--- | Intermediate state of evaluation
-type family Eval (f :: Type -> Type) :: Type
--- | Unevaluated expressions
-type family Uneval (f :: Type -> Type) :: Type
-
--- -- | The result of evaluation
--- type family Result (f :: Type -> Type) :: Type
-
-type family Dissection (f :: Type -> Type) :: Type -> Type -> Type
-type family Local (f :: Type -> Type) :: Type -> Type
-
--- | Machine configuration
-data Elem (f :: Type -> Type) c j =
-    ElemReturn !(Eval f)
+-- | Elem
+data Elem f r v c j =
+    ElemReturn !v
   | ElemFocus !(f j)
-  | ElemReduce !(Redex f c j)
+  | ElemReduce !(r c j)
+  deriving stock (Eq, Show)
 
-deriving stock instance (Eq (Eval f), Eq (f j), Eq (Redex f c j)) => Eq (Elem f c j)
-deriving stock instance (Show (Eval f), Show (f j), Show (Redex f c j)) => Show (Elem f c j)
-
-instance (Functor f, Bifunctor (Redex f)) => Bifunctor (Elem f) where
+instance (Functor f, Bifunctor r) => Bifunctor (Elem f r v) where
   bimap f g = go where
     go = \case
-      ElemReturn x -> ElemReturn x
+      ElemReturn v -> ElemReturn v
       ElemFocus fj -> ElemFocus (fmap g fj)
       ElemReduce rcj -> ElemReduce (bimap f g rcj)
 
--- data Config f c j = Config ![Dissection f c j] !(Elem f c j)
-
--- instance (Functor f, Bifunctor (Redex f), Bifunctor (Dissection f)) => Bifunctor (Config f) where
---   bimap f g (Config ds e) = Config (fmap (bimap f g) ds) (bimap f g e)
-
--- deriving stock instance (Eq (Result f), Eq (f j), Eq (Redex f c j), Eq (Dissection f c j)) => Eq (Config f c j)
--- deriving stock instance (Show (Result f), Show (f j), Show (Redex f c j), Show (Dissection f c j)) => Show (Config f c j)
-
 -- | Reduction
-data Reduction (f :: Type -> Type) j =
-    ReductionReturn !(Eval f)
+data Reduction f v j =
+    ReductionReturn !v
   | ReductionFocus !(f j)
-  deriving stock (Functor)
+  deriving stock (Eq, Show, Functor)
 
 -- | Focus
-data Focus (f :: Type -> Type) c j =
-    FocusReturn !(Eval f)
-  | FocusDissect !j !(Dissection f c j)
+data Focus d v c j =
+    FocusReturn !v
+  | FocusDissect !j !(d c j)
+  deriving stock (Eq, Show)
 
-data Step (f :: Type -> Type) c j =
+instance Bifunctor d => Bifunctor (Focus d v) where
+  bimap f g = go where
+    go = \case
+      FocusReturn v -> FocusReturn v
+      FocusDissect j d -> FocusDissect (g j) (bimap f g d)
+
+data Step r d c j =
     StepReturn !c
-  -- | StepFocus !(f j)
-  | StepReduce !(Redex f c j)
-  | StepDissect !j !(Dissection f c j)
+  | StepReduce !(r c j)
+  | StepDissect !j !(d c j)
+  deriving stock (Eq, Show)
 
--- data Susp (f :: Type -> Type) c j =
---     SuspConfig !(Config f c j)
---   | SuspStep !j !(Dissection f c j)
+instance (Bifunctor r, Bifunctor d) => Bifunctor (Step r d) where
+  bimap f g = \case
+    StepReturn c -> StepReturn (f c)
+    StepReduce r -> StepReduce (bimap f g r)
+    StepDissect j d -> StepDissect (g j) (bimap f g d)
 
--- deriving stock instance (Eq (Result f), Eq (f j), Eq (Redex f c j), Eq j, Eq (Dissection f c j)) => Eq (Susp f c j)
--- deriving stock instance (Show (Result f), Show (f j), Show (Redex f c j), Show j, Show (Dissection f c j)) => Show (Susp f c j)
+class (Bifunctor r, Functor (RedExp r), Monad (RedEffect r), Base (RedUneval r) ~ RedExp r) => Reducible r where
+  -- | Expression functor
+  type family RedExp r :: Type -> Type
 
--- instance (Functor f, Bifunctor (Redex f), Bifunctor (Dissection f)) => Bifunctor (Susp f) where
---   bimap f g = go where
---     go = \case
---       SuspConfig c -> SuspConfig (bimap f g c)
---       SuspStep j dcj -> SuspStep (g j) (bimap f g dcj)
+  -- | Some monad capturing the effect of evaluation (e.g. reader, error, state, and their combinations)
+  type family RedEffect r :: Type -> Type
 
-class (Functor f, Bifunctor (Redex f), Monad (Effect f), Base (Uneval f) ~ f) => Reducible f where
+  -- | Intermediate state of evaluation
+  type family RedEval r :: Type
+
+  -- | Unevaluated expressions
+  type family RedUneval r :: Type
+
   -- | Evaluates the redex
-  redexReduce :: Redex f (Eval f) (Uneval f) -> Effect f (Reduction f (Uneval f))
+  redexReduce :: r (RedEval r) (RedUneval r) -> RedEffect r (Reduction (RedExp r) (RedEval r) (RedUneval r))
 
-class (Reducible f, Bifunctor (Dissection f), Base (Uneval f) ~ f) => Dissectable f where
+class (Bifunctor d, Functor (DisExp d)) => Dissectable d where
+  type family DisExp d :: Type -> Type
+
+  type family DisEval d :: Type
+
+  type family DisLocal d :: Type -> Type
+
+  type family DisRed d :: Type -> Type -> Type
+
   -- | Focus on the next element
-  disFocus :: f j -> Focus f c j
+  disFocus :: DisExp d j -> Focus d (DisEval d) c j
 
-  disStep :: Scoped (Local f) c j => c -> Dissection f c j -> Step f c j
+  -- | Advance one step in the dissection
+  disStep :: Scoped (DisLocal d) c j => c -> d c j -> Step (DisRed d) d c j
 
-  -- | Continue evaluation of the dissected expression
-  -- disContinue :: Scoped (Local f) c j => c -> Dissection f c j -> Susp f c j
+class (
+    Functor f, Monad (LangEffect f),
+    Reducible (LangRed f), RedExp (LangRed f) ~ f, RedEval (LangRed f) ~ LangEval f,
+    RedEval (LangRed f) ~ LangEval f, RedUneval (LangRed f) ~ LangUneval f, RedEffect (LangRed f) ~ LangEffect f,
+    Dissectable (LangDis f), DisExp (LangDis f) ~ f, DisEval (LangDis f) ~ LangEval f,
+    DisLocal (LangDis f) ~ LangLocal f, DisRed (LangDis f) ~ LangRed f,
+    Scoped (LangLocal f) (LangEval f) (LangUneval f)
+  ) => Language f where
+  type LangRed f :: Type -> Type -> Type
+  type LangDis f :: Type -> Type -> Type
+  type LangEval f :: Type
+  type LangUneval f :: Type
+  type LangEffect f :: Type -> Type
+  type LangLocal f :: Type -> Type
 
-newtype ElemF f = ElemF { unElemF :: Elem f (Eval f) (Uneval f) }
-newtype DisF f = DisF { unDisF :: Dissection f (Eval f) (Uneval f) }
-type DisStack f = Stack (DisF f)
+newtype MachineElem f = MachineElem (Elem f (LangRed f) (LangEval f) (LangEval f) (LangUneval f))
+newtype MachineDis f = MachineDis (LangDis f (LangEval f) (LangUneval f))
 
-newtype MachineM f a = MachineM { unMachineM :: StateStackT (ElemF f) (DisF f) (Effect f) a }
+newtype MachineM f a = MachineM { unMachineM :: StateStackT (MachineElem f) (MachineDis f) (LangEffect f) a }
 
-deriving newtype instance Functor (Effect f) => Functor (MachineM f)
-deriving newtype instance Monad (Effect f) => Applicative (MachineM f)
-deriving newtype instance Monad (Effect f) => Monad (MachineM f)
-deriving newtype instance Monad (Effect f) => MonadStack (DisF f) (MachineM f)
-deriving newtype instance Monad (Effect f) => MonadState (ElemF f) (MachineM f)
+deriving newtype instance Functor (LangEffect f) => Functor (MachineM f)
+deriving newtype instance Monad (LangEffect f) => Applicative (MachineM f)
+deriving newtype instance Monad (LangEffect f) => Monad (MachineM f)
+deriving newtype instance Monad (LangEffect f) => MonadStack (MachineDis f) (MachineM f)
+deriving newtype instance Monad (LangEffect f) => MonadState (MachineElem f) (MachineM f)
 
-runMachineM :: MachineM f a -> ElemF f -> DisStack f -> Effect f (a, ElemF f, DisStack f)
+runMachineM :: MachineM f a -> MachineElem f -> Stack (MachineDis f) -> m (a, MachineElem f, Stack (MachineDis f))
 runMachineM = error "TODO"
 
-type MachineC f = (Dissectable f, Monad (Effect f))
+-- eval :: (Recursive (Uneval f), Dissectable f) => Uneval f -> Effect f (ElemF f, DisStack f)
+-- eval = error "TODO"
 
-eval :: (Recursive (Uneval f), Dissectable f) => Uneval f -> Effect f (ElemF f, DisStack f)
-eval = error "TODO"
-
-evalM :: MachineC f => MachineM f Bool
+evalM :: Language f => MachineM f Bool
 evalM = do
-  ElemF elem <- get
+  MachineElem elem <- get
   case elem of
     ElemReturn res -> do
       md <- popStackM
       case md of
         Nothing -> pure True
-        Just (DisF d) ->
+        Just (MachineDis d) ->
           case disStep res d of
-            _ -> undefined
-          --   StepReturn c -> put (ElemF c) $> False
-          --   StepReduce red -> undefined
-          --   StepDissect j ds' -> undefined
+            StepReturn c -> put (MachineElem (ElemReturn c)) $> False
+            StepReduce red -> undefined
+            StepDissect j ds' -> undefined
     ElemFocus jf -> error "TODO"
     ElemReduce red -> error "TODO"
 
--- onFocus :: Dissectable f => Focus f (Eval f) (Uneval f) -> MachineM f (Result f)
--- onFocus = \case
---     FocusReturn r -> pure r
---     FocusDissect j d -> error "TODO"
-
--- eval :: (Recursive (Uneval f), Dissectable f) => Uneval f -> MachineM f (Result f)
--- eval = onFocus . disFocus . project
-
--- -- Example follows:
+-- Example follows:
 
 -- | We'll just use strings for variables.
 -- These might include operation names like +, *, etc.
@@ -259,23 +256,26 @@ runExpM m ve = runExcept (runReaderT (unExpM m) ve)
 instance MonadFail ExpM where
   fail = throwError
 
-type instance Effect ExpF = ExpM
-type instance Eval ExpF = Value
-type instance Uneval ExpF = Exp
-type instance Redex ExpF = ExpRed
-type instance Dissection ExpF = ExpDis
-type instance Local ExpF = ExpLocal
+instance Reducible ExpRed where
+  type RedExp ExpRed = ExpF
+  type RedEffect ExpRed = ExpM
+  type RedEval ExpRed = Value
+  type RedUneval ExpRed = AnnoExp ExpLocal Value Exp
 
-instance Reducible ExpF where
   redexReduce = \case
     ExpRedIf c jt je ->
       case c of
         ValueLit (LitBool b) ->
-          pure (ReductionFocus (project (if b then jt else je)))
+          pure (ReductionFocus (traverse project (if b then jt else je)))
         _ -> fail "non-boolean guard"
     ExpRedApp h tl -> error "TODO"
 
-instance Dissectable ExpF where
+instance Dissectable ExpDis where
+  type DisExp ExpDis = ExpF
+  type DisEval ExpDis = Value
+  type DisLocal ExpDis = ExpLocal
+  type DisRed ExpDis = ExpRed
+
   disFocus = \case
     ExpVarF v -> FocusReturn (ValueVar v)
     ExpLitF l -> FocusReturn (ValueLit l)
@@ -296,23 +296,11 @@ instance Dissectable ExpF where
         Empty -> StepReduce (ExpRedApp chd (ctl :|> c))
         j :<| jtl' -> StepDissect j (ExpDisAppTail c (ctl :|> c) jtl')
 
--- type ScopedExp = AnnoExp (Map Var) Value Exp
-
--- initExp :: Exp -> ExpF ScopedExp
--- initExp = fmap (AnnoExp mempty) . project
-
--- -- startEval :: ExpF ScopedExp -> ExpM Value
--- -- startEval e = do
--- --   case disStart e of
--- --     SuspReturn v -> pure v
--- --     SuspReduce rcj -> error "TODO"
--- --     SuspStep j dcj -> error "TODO"
-
--- -- eval :: Exp -> ExpM Value
--- -- eval = startEval . initExp
-
--- -- eval :: Monad m => (Redex Value -> m Value) -> Exp -> m Value
--- -- eval f = go . select where
--- --   go = \case
--- --     Left v -> pure v
--- --     Right c -> undefined
+instance Language ExpF where
+  type LangEffect ExpF = ExpM
+  type LangEval ExpF = Value
+  type LangUneval ExpF = AnnoExp ExpLocal Value Exp
+  type LangEval ExpF = Value
+  type LangLocal ExpF = ExpLocal
+  type LangRed ExpF = ExpRed
+  type LangDis ExpF = ExpDis

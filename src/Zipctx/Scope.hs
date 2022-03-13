@@ -1,5 +1,7 @@
 module Zipctx.Scope where
 
+import Data.Functor.Foldable (Base, Recursive (..))
+
 -- | Captures the effect of applying local scope changes
 -- Laws: `localScope mempty = id`, `localScope (a <> b) j = localScope a (localScope b j)`
 class Monoid (l c) => Scoped l c j where
@@ -24,8 +26,11 @@ newtype AnnoScope l c = AnnoScope (l c)
   deriving stock (Show)
   deriving newtype (Eq, Semigroup, Monoid)
 
-data AnnoExp l c a = AnnoExp !(l c) !a
-  deriving stock (Eq, Show)
+data AnnoExp l c j = AnnoExp !(l c) !j
+  deriving stock (Eq, Show, Functor, Foldable, Traversable)
 
-instance Monoid (l c) => Scoped (AnnoScope l) c (AnnoExp l c a) where
-  localScope (AnnoScope lcX) (AnnoExp lcY a) = AnnoExp (lcX <> lcY) a
+instance Monoid (l c) => Scoped (AnnoScope l) c (AnnoExp l c j) where
+  localScope (AnnoScope lcX) (AnnoExp lcY j) = AnnoExp (lcX <> lcY) j
+
+projectAnnoExp :: Recursive j => AnnoExp l c j -> Base j (AnnoExp l c j)
+projectAnnoExp (AnnoExp lc j) = fmap (AnnoExp lc) (project j)
